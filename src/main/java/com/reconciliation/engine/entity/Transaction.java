@@ -147,6 +147,10 @@ public class Transaction extends CreationAndUpdateAudit {
         return externalReference;
     }
 
+    public void setExternalReference(String externalReference) {
+        this.externalReference = externalReference;
+    }
+
     /**
      * Equality based on the business key ({@code transactionReference}), for
      * the same reasons as {@link Account}.

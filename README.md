@@ -7,8 +7,8 @@ reconciliation → reporting/analytics.
 Built as a **modular monolith** with Spring Boot, PostgreSQL, and a separate
 Python/Pandas analytics component that consumes exported data.
 
-> **Status:** Phase 2 — database schema, JPA entities, and repositories.
-> No services, controllers, or business logic (risk/reconciliation rules) yet.
+> **Status:** Phase 3 — Transaction REST API (create/get/list/filter/update), DTOs, validation, global error handling.
+> Risk detection, settlement ingestion, and reconciliation are not implemented yet.
 
 ## Architecture
 
@@ -20,17 +20,17 @@ Controller -> Service -> Repository -> Database
 
 ```
 src/main/java/com/reconciliation/engine/
-├── config/           Spring configuration (beans, CORS, etc.) — empty so far
-├── controller/       REST controllers — placeholder /api/status only so far
-├── service/          Business logic / orchestration — empty so far
-├── repository/       Spring Data JPA repositories (Phase 2)
-├── entity/           JPA entities (Phase 2) — never exposed directly over the API
-├── dto/              Request/response objects exposed over the API — empty so far
-├── mapper/           Entity <-> DTO conversion — empty so far
-├── exception/        Custom exceptions + centralized @ControllerAdvice — empty so far
-├── risk/             Risk-detection rules (one class per rule) — empty so far
+├── config/           Spring configuration — empty so far
+├── controller/       REST controllers: TransactionController (Phase 3)
+├── service/          Business logic: TransactionService (Phase 3)
+├── repository/       Spring Data JPA repositories + TransactionSpecifications (Phase 3)
+├── entity/           JPA entities — never exposed directly over the API
+├── dto/              Request/response DTOs (Phase 3) — PagedResponse, transaction/*
+├── mapper/           Entity <-> DTO conversion — kept inline on the DTO (see below); empty so far
+├── exception/        ResourceNotFoundException, BadRequestException, ApiError, GlobalExceptionHandler (Phase 3)
+├── risk/             Risk-detection rules — empty so far
 ├── reconciliation/   Reconciliation engine — empty so far
-└── common/           Enums (Phase 2) + audit base classes
+└── common/           Enums + audit base classes
 
 src/main/resources/db/migration/
 └── V1__init_schema.sql   Flyway migration: creates all 5 Phase 2 tables
@@ -143,15 +143,164 @@ SELECT version, description, success FROM flyway_schema_history;
 SELECT indexname, indexdef FROM pg_indexes WHERE tablename = 'risk_flags';
 ```
 
-## Roadmap (phases)
+## Transaction API (Phase 3)
+
+All endpoints are under `/api/v1/transactions`. Entities are never returned
+directly — every response is a DTO (`TransactionResponse`).
+
+> **Note on field naming vs. the schema:** `accountId` in query params and
+> `accountNumber` in request/response bodies both refer to the business
+> `Account.accountNumber` (e.g. `"ACC-1001"`), not the internal database id.
+> `transactionReference` is the client/upstream-assigned business identifier;
+> `externalReference` is a separate, optional upstream-processor reference.
+> There is no `description` field — it isn't part of the Phase 2 schema, and
+> adding one was out of scope for this phase (see Known Limitations below).
+
+### Create
+
+```http
+POST /api/v1/transactions
+Content-Type: application/json
+
+{
+  "transactionReference": "BANK-TXN-10001",
+  "accountNumber": "ACC-1001",
+  "amount": 12500.50,
+  "currency": "INR",
+  "transactionType": "PAYMENT",
+  "transactionTimestamp": "2026-08-30T10:30:00",
+  "externalReference": "PSP-REF-88213"
+}
+```
+
+`transactionType` must be one of `DEPOSIT`, `WITHDRAWAL`, `TRANSFER`,
+`PAYMENT`, `REFUND`. The transaction is always created with
+`status: PENDING` — a client cannot set the initial status.
+
+Response: `201 Created`
+
+```json
+{
+  "id": 42,
+  "transactionReference": "BANK-TXN-10001",
+  "accountNumber": "ACC-1001",
+  "amount": 12500.5000,
+  "currency": "INR",
+  "transactionType": "PAYMENT",
+  "status": "PENDING",
+  "transactionTimestamp": "2026-08-30T10:30:00",
+  "externalReference": "PSP-REF-88213",
+  "createdAt": "2026-08-30T10:30:05.123",
+  "updatedAt": "2026-08-30T10:30:05.123"
+}
+```
+
+`404 Not Found` if `accountNumber` doesn't match an existing account.
+`400 Bad Request` with `fieldErrors` for validation failures.
+`409 Conflict` if `transactionReference` already exists.
+
+### Get
+
+```http
+GET /api/v1/transactions/{id}
+```
+
+`{id}` is the internal numeric id (the `id` field in the response above, not
+`transactionReference`). Returns `200 OK` or `404 Not Found`.
+
+### List / Filter
+
+```http
+GET /api/v1/transactions?page=0&size=20
+GET /api/v1/transactions?accountId=ACC-1001
+GET /api/v1/transactions?status=COMPLETED
+GET /api/v1/transactions?transactionType=PAYMENT
+GET /api/v1/transactions?currency=INR
+GET /api/v1/transactions?from=2026-08-01T00:00:00Z&to=2026-08-30T23:59:59Z
+GET /api/v1/transactions?minAmount=1000&maxAmount=50000
+```
+
+All filters are optional and combinable. `status`/`transactionType` values
+are validated against the real enums — an unrecognized value returns `400`,
+not a silently-empty result. Response:
+
+```json
+{
+  "content": [ { "...": "TransactionResponse" } ],
+  "page": 0,
+  "size": 20,
+  "totalElements": 137,
+  "totalPages": 7,
+  "first": true,
+  "last": false
+}
+```
+
+### Update
+
+```http
+PUT /api/v1/transactions/{id}
+Content-Type: application/json
+
+{
+  "status": "COMPLETED",
+  "externalReference": "PSP-REF-88213-CONFIRMED"
+}
+```
+
+Only `status` and `externalReference` are mutable. `transactionReference`,
+`accountNumber`, `amount`, `currency`, `transactionType`, and
+`transactionTimestamp` cannot be changed after creation — they aren't even
+fields on `UpdateTransactionRequest`, so there's no way to submit them.
+No status-transition rules are enforced yet (any valid enum value is
+accepted); that belongs to a later phase.
+
+Returns `200 OK` with the updated `TransactionResponse`, or `404 Not Found`.
+
+### Errors
+
+Every error follows the same shape:
+
+```json
+{
+  "timestamp": "2026-08-30T10:30:00",
+  "status": 400,
+  "error": "Bad Request",
+  "message": "Validation failed",
+  "path": "/api/v1/transactions",
+  "fieldErrors": {
+    "amount": "must be greater than 0",
+    "currency": "must be a 3-letter ISO 4217 code"
+  }
+}
+```
+
+`fieldErrors` is omitted (not present in the JSON) for non-validation
+errors. Unexpected server errors return `500` with a generic message — the
+real exception is logged server-side, never returned to the client.
+
+### Known limitations (Phase 3)
+
+- No `description`/notes field — not part of the Phase 2 schema; would need
+  a new migration, which was out of scope here.
+- No optimistic locking (`@Version`) on `Transaction` yet — concurrent
+  updates to the same transaction can overwrite each other silently. Worth
+  adding before this becomes a multi-writer system.
+- `PUT` fully replaces the mutable fields rather than supporting partial
+  (`PATCH`-style) updates — acceptable given there are only two mutable
+  fields today, but worth revisiting if more become mutable later.
+- No idempotency handling beyond the database's unique constraint on
+  `transaction_reference` (a resubmitted create returns `409`, not the
+  original `201` response).
+
+
 
 1. ✅ Project scaffolding, Spring Boot setup, Postgres via Docker
 2. ✅ Database schema (Flyway), JPA entities, repositories
-3. Transaction API: create/get/list/filter/update + DTOs + validation
-4. Exception handling + global error responses
-5. Risk detection engine (rule-based)
-6. Settlement ingestion + reconciliation engine
-7. Reconciliation REST API
-8. Reporting endpoints
-9. Python/Pandas analytics component
-10. Integration tests, polish, documentation pass
+3. ✅ Transaction API: create/get/list/filter/update, DTOs, validation, global error handling
+4. Risk detection engine (rule-based)
+5. Settlement ingestion + reconciliation engine
+6. Reconciliation REST API
+7. Reporting endpoints
+8. Python/Pandas analytics component
+9. Integration tests, polish, documentation pass
