@@ -1,0 +1,30 @@
+spring:
+  application:
+    name: txn-reconciliation-engine
+
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:reconciliation_db}
+    username: ${DB_USER:reconciliation_user}
+    password: ${DB_PASSWORD:reconciliation_pass}
+    driver-class-name: org.postgresql.Driver
+
+  jpa:
+    # 'validate' (not 'update') on purpose: schema changes must come from explicit,
+    # reviewable migrations, not from Hibernate silently altering tables at boot.
+    # Until we introduce a migration tool (Flyway) in a later phase, we temporarily
+    # use 'update' in local dev only, and will switch to 'validate' once migrations exist.
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+    open-in-view: false
+
+server:
+  port: 8080
+
+logging:
+  level:
+    com.reconciliation.engine: DEBUG
+    org.hibernate.SQL: DEBUG
