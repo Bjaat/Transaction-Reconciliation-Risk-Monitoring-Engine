@@ -47,6 +47,20 @@
             <scope>runtime</scope>
         </dependency>
 
+        <!-- Flyway: manages the schema via versioned SQL migrations instead of
+             letting Hibernate auto-generate/alter tables (ddl-auto is now
+             'validate', not 'update' — see application.yml). As of Flyway 10,
+             database-specific support (including PostgreSQL) moved into a
+             separate module, so both dependencies below are required. -->
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-database-postgresql</artifactId>
+        </dependency>
+
         <!-- Lombok: removes getter/setter/constructor boilerplate on entities and DTOs.
              Trade-off: adds an annotation-processing "magic" step that newcomers to the
              codebase must understand, but it is the de facto standard in production
@@ -65,16 +79,41 @@
             <scope>test</scope>
         </dependency>
 
-        <!-- In-memory H2 database, used ONLY for fast unit/slice tests that don't
-             need to validate Postgres-specific behavior. Integration tests that must
-             validate real SQL/constraints will run against the real Postgres container
-             (added in a later phase via Testcontainers). -->
+        <!-- Testcontainers: persistence-layer tests run against a real, disposable
+             PostgreSQL container rather than an in-memory substitute like H2.
+             This schema relies on Postgres-specific behavior (NUMERIC precision,
+             a partial unique index in risk_flags, CHECK constraints) that an
+             H2 "Postgres compatibility mode" would not faithfully reproduce —
+             so using the real engine in tests is a correctness choice, not
+             just a nice-to-have. Requires Docker to be running locally. -->
         <dependency>
-            <groupId>com.h2database</groupId>
-            <artifactId>h2</artifactId>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-testcontainers</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>postgresql</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>org.testcontainers</groupId>
+                <artifactId>testcontainers-bom</artifactId>
+                <version>1.20.1</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
 
     <build>
         <plugins>
