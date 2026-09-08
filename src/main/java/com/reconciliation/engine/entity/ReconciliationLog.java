@@ -17,7 +17,7 @@ import java.util.Objects;
 
 /**
  * The persisted result of comparing one transaction against settlement data,
- * produced by the (not yet implemented) reconciliation engine.
+ * produced by {@code ReconciliationService} (Phase 4).
  *
  * Like {@link Settlement}, this references {@link Transaction} and
  * {@link Settlement} by business reference string, not foreign key — for
@@ -75,14 +75,38 @@ public class ReconciliationLog extends CreationAudit {
     @Column(name = "reconciled_at", nullable = false)
     private LocalDateTime reconciledAt;
 
+    /**
+     * Added in Phase 4 (V2 migration) alongside {@code CURRENCY_MISMATCH}.
+     * Nullable for the same reason {@code expectedAmount}/{@code actualAmount}
+     * are: a MISSING_SETTLEMENT result has no actual side to record.
+     */
+    @Column(name = "expected_currency", length = 3)
+    private String expectedCurrency;
+
+    @Column(name = "actual_currency", length = 3)
+    private String actualCurrency;
+
     protected ReconciliationLog() {
         // required by JPA
+    }
+
+    /**
+     * Original Phase 2 constructor, preserved unchanged (existing tests and
+     * call sites depend on this exact signature). Delegates to the Phase 4
+     * constructor with null currencies.
+     */
+    public ReconciliationLog(String transactionReference, String settlementReference, ReconciliationStatus result,
+                              BigDecimal expectedAmount, BigDecimal actualAmount, BigDecimal amountDifference,
+                              String expectedStatus, String actualStatus, String explanation,
+                              LocalDateTime reconciledAt) {
+        this(transactionReference, settlementReference, result, expectedAmount, actualAmount, amountDifference,
+                expectedStatus, actualStatus, explanation, reconciledAt, null, null);
     }
 
     public ReconciliationLog(String transactionReference, String settlementReference, ReconciliationStatus result,
                               BigDecimal expectedAmount, BigDecimal actualAmount, BigDecimal amountDifference,
                               String expectedStatus, String actualStatus, String explanation,
-                              LocalDateTime reconciledAt) {
+                              LocalDateTime reconciledAt, String expectedCurrency, String actualCurrency) {
         this.transactionReference = transactionReference;
         this.settlementReference = settlementReference;
         this.result = result;
@@ -93,6 +117,8 @@ public class ReconciliationLog extends CreationAudit {
         this.actualStatus = actualStatus;
         this.explanation = explanation;
         this.reconciledAt = reconciledAt;
+        this.expectedCurrency = expectedCurrency;
+        this.actualCurrency = actualCurrency;
     }
 
     public Long getId() {
@@ -137,6 +163,14 @@ public class ReconciliationLog extends CreationAudit {
 
     public LocalDateTime getReconciledAt() {
         return reconciledAt;
+    }
+
+    public String getExpectedCurrency() {
+        return expectedCurrency;
+    }
+
+    public String getActualCurrency() {
+        return actualCurrency;
     }
 
     @Override

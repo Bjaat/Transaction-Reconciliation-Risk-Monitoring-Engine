@@ -11,4 +11,7 @@ public interface ReconciliationLogRepository extends JpaRepository<Reconciliatio
     List<ReconciliationLog> findByResult(ReconciliationStatus result);
 
     List<ReconciliationLog> findByTransactionReference(String transactionReference);
+
+    /** Newest-first history for a transaction — used by the reconciliation history endpoint. */
+    List<ReconciliationLog> findByTransactionReferenceOrderByReconciledAtDesc(String transactionReference);
 }

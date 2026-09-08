@@ -7,8 +7,8 @@ reconciliation → reporting/analytics.
 Built as a **modular monolith** with Spring Boot, PostgreSQL, and a separate
 Python/Pandas analytics component that consumes exported data.
 
-> **Status:** Phase 3 — Transaction REST API (create/get/list/filter/update), DTOs, validation, global error handling.
-> Risk detection, settlement ingestion, and reconciliation are not implemented yet.
+> **Status:** Phase 4 — Reconciliation engine (single-transaction reconcile, history, batch), exposed via REST.
+> Risk detection and analytics are not implemented yet.
 
 ## Architecture
 
@@ -295,12 +295,109 @@ real exception is logged server-side, never returned to the client.
 
 
 
+## Reconciliation API (Phase 4)
+
+Compares a transaction against settlement data (matched by business
+`transactionReference`) and persists the outcome as a `ReconciliationLog`.
+Reconciliation is **not idempotent by design** — each call appends a new
+history entry rather than overwriting the last one, so re-running
+reconciliation after a settlement arrives late preserves the earlier
+`MISSING_SETTLEMENT` result alongside the later `MATCHED` one.
+
+### Matching rules
+
+For a transaction's settlements (found by the same `transactionReference`),
+in order:
+
+1. Zero settlements found → `MISSING_SETTLEMENT`
+2. More than one settlement found → `DUPLICATE_SETTLEMENT`
+3. Exactly one settlement found, then checked in this order:
+   - Currencies differ → `CURRENCY_MISMATCH`
+   - Amounts differ → `AMOUNT_MISMATCH`
+   - Statuses disagree → `STATUS_MISMATCH` (mapping: `COMPLETED`↔`SETTLED`,
+     `FAILED`↔`FAILED`, `REVERSED`↔`REVERSED`, `PENDING`/`PROCESSING`↔`PENDING`
+     — `TransactionStatus` and `SettlementStatus` don't share values, so this
+     mapping is a documented assumption, not a database-enforced rule)
+   - Otherwise → `MATCHED`
+
+### Reconcile a transaction
+
+```http
+POST /api/v1/reconciliations
+Content-Type: application/json
+
+{ "transactionReference": "BANK-TXN-10001" }
+```
+
+Response: `201 Created`
+
+```json
+{
+  "id": 7,
+  "transactionReference": "BANK-TXN-10001",
+  "settlementReference": "PSP-REF-88213",
+  "status": "MATCHED",
+  "expectedAmount": 12500.5000,
+  "actualAmount": 12500.5000,
+  "expectedCurrency": "INR",
+  "actualCurrency": "INR",
+  "expectedStatus": "COMPLETED",
+  "actualStatus": "SETTLED",
+  "explanation": "Transaction and settlement match on amount, currency, and status",
+  "reconciledAt": "2026-08-30T11:00:00"
+}
+```
+
+`404 Not Found` if the transaction reference doesn't exist. `400 Bad Request`
+if the request body fails validation.
+
+### Reconciliation history
+
+```http
+GET /api/v1/reconciliations/{transactionReference}
+```
+
+Returns a JSON array of every past reconciliation result for that
+transaction, newest first. `404` if the transaction itself doesn't exist;
+an empty array (not an error) if it exists but has never been reconciled.
+
+### Batch reconciliation
+
+```http
+POST /api/v1/reconciliations/run
+```
+
+Reconciles every transaction currently in the system. One transaction
+failing doesn't stop the rest — failures are tallied, not thrown. Response:
+
+```json
+{
+  "totalProcessed": 137,
+  "matched": 110,
+  "amountMismatch": 8,
+  "currencyMismatch": 2,
+  "statusMismatch": 5,
+  "missingSettlement": 11,
+  "duplicateSettlement": 1,
+  "failed": 0
+}
+```
+
+### Database changes (V2 migration)
+
+`V1` is untouched. `V2__reconciliation_currency_support.sql` adds
+`expected_currency`/`actual_currency` columns to `reconciliation_logs` and
+widens the `result` `CHECK` constraint to allow `CURRENCY_MISMATCH` — both
+genuinely required to satisfy the API response shape and matching rules
+above; nothing else about the schema changed.
+
+## Roadmap (phases)
+
 1. ✅ Project scaffolding, Spring Boot setup, Postgres via Docker
 2. ✅ Database schema (Flyway), JPA entities, repositories
 3. ✅ Transaction API: create/get/list/filter/update, DTOs, validation, global error handling
-4. Risk detection engine (rule-based)
-5. Settlement ingestion + reconciliation engine
-6. Reconciliation REST API
-7. Reporting endpoints
-8. Python/Pandas analytics component
-9. Integration tests, polish, documentation pass
+4. ✅ Reconciliation engine: reconcile/history/batch, V2 migration for currency support
+5. Risk detection engine (rule-based)
+6. Reporting endpoints
+7. Python/Pandas analytics component
+8. Integration tests, polish, documentation pass

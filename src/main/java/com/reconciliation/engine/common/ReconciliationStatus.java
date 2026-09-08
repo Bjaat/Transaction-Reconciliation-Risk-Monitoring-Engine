@@ -9,6 +9,9 @@ package com.reconciliation.engine.common;
  * MISSING_SETTLEMENT    - transaction exists, no corresponding settlement found.
  * UNMATCHED_SETTLEMENT  - settlement exists, no corresponding transaction found.
  * AMOUNT_MISMATCH       - both exist, amounts differ.
+ * CURRENCY_MISMATCH     - both exist, currencies differ (checked before
+ *                         amount — an amount comparison across different
+ *                         currencies isn't meaningful).
  * STATUS_MISMATCH       - both exist, statuses disagree.
  * DUPLICATE_SETTLEMENT  - more than one settlement record found for the same
  *                         transaction reference.
@@ -18,6 +21,7 @@ public enum ReconciliationStatus {
     MISSING_SETTLEMENT,
     UNMATCHED_SETTLEMENT,
     AMOUNT_MISMATCH,
+    CURRENCY_MISMATCH,
     STATUS_MISMATCH,
     DUPLICATE_SETTLEMENT
 }
