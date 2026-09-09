@@ -17,6 +17,8 @@ public interface TransactionRepository extends JpaRepository<Transaction, Long>,
 
     boolean existsByTransactionReference(String transactionReference);
 
+    long countByExternalReference(String externalReference);
+
     Page<Transaction> findByAccountId(Long accountId, Pageable pageable);
 
     Page<Transaction> findByStatus(TransactionStatus status, Pageable pageable);

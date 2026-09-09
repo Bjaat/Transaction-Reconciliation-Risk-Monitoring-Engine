@@ -7,8 +7,8 @@ reconciliation → reporting/analytics.
 Built as a **modular monolith** with Spring Boot, PostgreSQL, and a separate
 Python/Pandas analytics component that consumes exported data.
 
-> **Status:** Phase 4 — Reconciliation engine (single-transaction reconcile, history, batch), exposed via REST.
-> Risk detection and analytics are not implemented yet.
+> **Status:** Phase 5 — rule-based risk detection, persisted risk flags, history, and batch evaluation, exposed via REST.
+> Reporting and analytics are not implemented yet.
 
 ## Architecture
 
@@ -21,15 +21,14 @@ Controller -> Service -> Repository -> Database
 ```
 src/main/java/com/reconciliation/engine/
 ├── config/           Spring configuration — empty so far
-├── controller/       REST controllers: TransactionController (Phase 3)
-├── service/          Business logic: TransactionService (Phase 3)
+├── controller/       REST controllers for transactions, reconciliation, and risk
+├── service/          Transaction, reconciliation, and risk orchestration
 ├── repository/       Spring Data JPA repositories + TransactionSpecifications (Phase 3)
 ├── entity/           JPA entities — never exposed directly over the API
-├── dto/              Request/response DTOs (Phase 3) — PagedResponse, transaction/*
+├── dto/              Request/response DTOs — transaction/*, reconciliation/*, risk/*
 ├── mapper/           Entity <-> DTO conversion — kept inline on the DTO (see below); empty so far
 ├── exception/        ResourceNotFoundException, BadRequestException, ApiError, GlobalExceptionHandler (Phase 3)
-├── risk/             Risk-detection rules — empty so far
-├── reconciliation/   Reconciliation engine — empty so far
+├── risk/             Independent rule-based risk checks
 └── common/           Enums + audit base classes
 
 src/main/resources/db/migration/
@@ -391,13 +390,58 @@ widens the `result` `CHECK` constraint to allow `CURRENCY_MISMATCH` — both
 genuinely required to satisfy the API response shape and matching rules
 above; nothing else about the schema changed.
 
+## Risk Detection API (Phase 5)
+
+Risk rules are independent `RiskRule` implementations. An evaluation persists a
+new `OPEN` flag only when that transaction/rule pair has no existing open flag,
+preserving the database's partial-unique-index invariant.
+
+Implemented rules:
+
+- `LARGE_AMOUNT` (`HIGH`) — amount is at least `risk.rules.large-amount-threshold`
+  (default `10000`).
+- `DUPLICATE_TRANSACTION` (`CRITICAL`) — a nonblank upstream
+  `externalReference` is shared by at least two transactions.
+
+### Evaluate one transaction
+
+```http
+POST /api/v1/risk/evaluations
+Content-Type: application/json
+
+{ "transactionReference": "BANK-TXN-10001" }
+```
+
+Returns `201 Created` with the number of rules evaluated and only the flags
+created by this run. Repeating the request while those flags remain `OPEN`
+returns an empty `flagsCreated` array. Unknown transactions return `404`;
+invalid requests return `400` using the existing error format.
+
+### Risk-flag history
+
+```http
+GET /api/v1/risk/flags/{transactionReference}
+```
+
+Returns all flags newest first. An existing transaction with no flags returns
+an empty array; an unknown transaction returns `404`.
+
+### Batch evaluation
+
+```http
+POST /api/v1/risk/evaluations/run
+```
+
+Evaluates every transaction and returns `totalProcessed`, `flagsCreated`, and
+`failed`. One transaction failure does not stop the remaining evaluations.
+
 ## Roadmap (phases)
 
 1. ✅ Project scaffolding, Spring Boot setup, Postgres via Docker
 2. ✅ Database schema (Flyway), JPA entities, repositories
 3. ✅ Transaction API: create/get/list/filter/update, DTOs, validation, global error handling
 4. ✅ Reconciliation engine: reconcile/history/batch, V2 migration for currency support
-5. Risk detection engine (rule-based)
+5. ✅ Risk detection engine (rule-based)
 6. Reporting endpoints
 7. Python/Pandas analytics component
 8. Integration tests, polish, documentation pass

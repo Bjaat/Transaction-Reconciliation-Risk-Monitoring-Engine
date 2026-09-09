@@ -106,4 +106,18 @@ class RiskFlagRepositoryTest {
 
         assertThat(results).extracting(RiskFlag::getRuleCode).containsExactly("RULE_B");
     }
+
+    @Test
+    void findsOpenFlagsAndReturnsTransactionHistoryNewestFirst() {
+        Transaction transaction = persistedTransaction("TXN-RF-5");
+        riskFlagRepository.saveAndFlush(new RiskFlag(transaction, "OLDER", RiskSeverity.LOW, "Older flag",
+                LocalDateTime.now().minusMinutes(1), RiskFlagStatus.RESOLVED));
+        riskFlagRepository.saveAndFlush(new RiskFlag(transaction, "NEWER", RiskSeverity.HIGH, "Newer flag",
+                LocalDateTime.now(), RiskFlagStatus.OPEN));
+
+        assertThat(riskFlagRepository.existsByTransactionIdAndRuleCodeAndStatus(
+                transaction.getId(), "NEWER", RiskFlagStatus.OPEN)).isTrue();
+        assertThat(riskFlagRepository.findByTransactionTransactionReferenceOrderByDetectedAtDesc("TXN-RF-5"))
+                .extracting(RiskFlag::getRuleCode).containsExactly("NEWER", "OLDER");
+    }
 }

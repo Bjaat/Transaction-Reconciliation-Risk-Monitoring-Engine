@@ -114,4 +114,13 @@ class TransactionRepositoryTest {
         assertThat(page.getContent()).extracting(Transaction::getTransactionReference)
                 .containsExactly("TXN-F1");
     }
+
+    @Test
+    void countsTransactionsSharingAnExternalReference() {
+        Account account = persistedAccount("ACC-2007");
+        transactionRepository.saveAndFlush(newTransaction("TXN-E1", account, BigDecimal.TEN, TransactionStatus.PENDING));
+        transactionRepository.saveAndFlush(newTransaction("TXN-E2", account, BigDecimal.ONE, TransactionStatus.PENDING));
+
+        assertThat(transactionRepository.countByExternalReference("EXT-REF-1")).isEqualTo(2);
+    }
 }
