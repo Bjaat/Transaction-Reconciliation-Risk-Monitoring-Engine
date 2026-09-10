@@ -120,4 +120,30 @@ class RiskFlagRepositoryTest {
         assertThat(riskFlagRepository.findByTransactionTransactionReferenceOrderByDetectedAtDesc("TXN-RF-5"))
                 .extracting(RiskFlag::getRuleCode).containsExactly("NEWER", "OLDER");
     }
+
+    @Test
+    void reportingQueriesGroupFlagsWithinInclusiveWindow() {
+        Transaction transaction = persistedTransaction("TXN-RF-REPORT");
+        LocalDateTime from = LocalDateTime.parse("2026-09-01T00:00:00");
+        LocalDateTime to = LocalDateTime.parse("2026-09-02T00:00:00");
+        riskFlagRepository.saveAndFlush(new RiskFlag(transaction, "LARGE_AMOUNT", RiskSeverity.HIGH,
+                "High amount", from, RiskFlagStatus.OPEN));
+        riskFlagRepository.saveAndFlush(new RiskFlag(transaction, "DUPLICATE_TRANSACTION", RiskSeverity.CRITICAL,
+                "Duplicate", to, RiskFlagStatus.RESOLVED));
+        riskFlagRepository.saveAndFlush(new RiskFlag(transaction, "OUTSIDE", RiskSeverity.LOW,
+                "Outside window", to.plusSeconds(1), RiskFlagStatus.OPEN));
+
+        var statuses = riskFlagRepository.summarizeStatus(from, to);
+        var severities = riskFlagRepository.summarizeSeverity(from, to);
+        var rules = riskFlagRepository.summarizeRule(from, to);
+
+        assertThat(statuses).extracting(row -> row.getGroupValue().toString(), row -> row.getTotal())
+                .containsExactlyInAnyOrder(
+                        org.assertj.core.groups.Tuple.tuple("OPEN", 1L),
+                        org.assertj.core.groups.Tuple.tuple("RESOLVED", 1L));
+        assertThat(severities).extracting(row -> row.getGroupValue().toString())
+                .containsExactlyInAnyOrder("HIGH", "CRITICAL");
+        assertThat(rules).extracting(row -> row.getGroupValue().toString())
+                .containsExactlyInAnyOrder("LARGE_AMOUNT", "DUPLICATE_TRANSACTION");
+    }
 }

@@ -123,4 +123,35 @@ class TransactionRepositoryTest {
 
         assertThat(transactionRepository.countByExternalReference("EXT-REF-1")).isEqualTo(2);
     }
+
+    @Test
+    void reportingQueriesAggregateAnInclusiveWindowAndKeepCurrenciesSeparate() {
+        Account account = persistedAccount("ACC-REPORT");
+        LocalDateTime from = LocalDateTime.parse("2026-09-01T00:00:00");
+        LocalDateTime to = LocalDateTime.parse("2026-09-02T00:00:00");
+        transactionRepository.saveAndFlush(new Transaction("TXN-RPT-1", account, new BigDecimal("10.0000"),
+                "USD", TransactionType.PAYMENT, TransactionStatus.COMPLETED, from, null));
+        transactionRepository.saveAndFlush(new Transaction("TXN-RPT-2", account, new BigDecimal("20.0000"),
+                "USD", TransactionType.PAYMENT, TransactionStatus.COMPLETED, to, null));
+        transactionRepository.saveAndFlush(new Transaction("TXN-RPT-3", account, new BigDecimal("50.0000"),
+                "EUR", TransactionType.REFUND, TransactionStatus.FAILED, to.plusSeconds(1), null));
+
+        var statuses = transactionRepository.summarizeStatus(from, to);
+        var types = transactionRepository.summarizeType(from, to);
+        var amounts = transactionRepository.summarizeAmountsByCurrency(from, to);
+
+        assertThat(statuses).singleElement().satisfies(row -> {
+            assertThat(row.getGroupValue()).isEqualTo(TransactionStatus.COMPLETED);
+            assertThat(row.getTotal()).isEqualTo(2);
+        });
+        assertThat(types).singleElement().satisfies(row -> {
+            assertThat(row.getGroupValue()).isEqualTo(TransactionType.PAYMENT);
+            assertThat(row.getTotal()).isEqualTo(2);
+        });
+        assertThat(amounts).singleElement().satisfies(row -> {
+            assertThat(row.getCurrency()).isEqualTo("USD");
+            assertThat(row.getTransactionCount()).isEqualTo(2);
+            assertThat(row.getTotalAmount()).isEqualByComparingTo("30.0000");
+        });
+    }
 }

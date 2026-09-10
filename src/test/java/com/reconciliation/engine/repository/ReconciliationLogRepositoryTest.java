@@ -88,4 +88,29 @@ class ReconciliationLogRepositoryTest {
         assertThat(results).hasSize(1);
         assertThat(results.get(0).getResult()).isEqualTo(ReconciliationStatus.DUPLICATE_SETTLEMENT);
     }
+
+    @Test
+    void reportingQueryGroupsResultsWithinInclusiveWindow() {
+        LocalDateTime from = LocalDateTime.parse("2026-09-01T00:00:00");
+        LocalDateTime to = LocalDateTime.parse("2026-09-02T00:00:00");
+        reconciliationLogRepository.saveAndFlush(new ReconciliationLog(
+                "TXN-RPT-1", "SET-RPT-1", ReconciliationStatus.MATCHED,
+                BigDecimal.TEN, BigDecimal.TEN, BigDecimal.ZERO,
+                "COMPLETED", "SETTLED", "Matched", from));
+        reconciliationLogRepository.saveAndFlush(new ReconciliationLog(
+                "TXN-RPT-2", null, ReconciliationStatus.MISSING_SETTLEMENT,
+                BigDecimal.ONE, null, null, "COMPLETED", null, "Missing", to));
+        reconciliationLogRepository.saveAndFlush(new ReconciliationLog(
+                "TXN-RPT-3", "SET-RPT-3", ReconciliationStatus.MATCHED,
+                BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ZERO,
+                "COMPLETED", "SETTLED", "Outside window", to.plusSeconds(1)));
+
+        var results = reconciliationLogRepository.summarizeResults(from, to);
+
+        assertThat(results).hasSize(2);
+        assertThat(results).extracting(row -> row.getGroupValue().toString(), row -> row.getTotal())
+                .containsExactlyInAnyOrder(
+                        org.assertj.core.groups.Tuple.tuple("MATCHED", 1L),
+                        org.assertj.core.groups.Tuple.tuple("MISSING_SETTLEMENT", 1L));
+    }
 }

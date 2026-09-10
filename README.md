@@ -7,8 +7,8 @@ reconciliation → reporting/analytics.
 Built as a **modular monolith** with Spring Boot, PostgreSQL, and a separate
 Python/Pandas analytics component that consumes exported data.
 
-> **Status:** Phase 5 — rule-based risk detection, persisted risk flags, history, and batch evaluation, exposed via REST.
-> Reporting and analytics are not implemented yet.
+> **Status:** Phase 6 — read-only transaction, reconciliation, and risk reporting endpoints with optional time-window filtering.
+> The separate Python/Pandas analytics component is not implemented yet.
 
 ## Architecture
 
@@ -21,11 +21,11 @@ Controller -> Service -> Repository -> Database
 ```
 src/main/java/com/reconciliation/engine/
 ├── config/           Spring configuration — empty so far
-├── controller/       REST controllers for transactions, reconciliation, and risk
-├── service/          Transaction, reconciliation, and risk orchestration
-├── repository/       Spring Data JPA repositories + TransactionSpecifications (Phase 3)
+├── controller/       REST controllers for transactions, reconciliation, risk, and reporting
+├── service/          Transaction, reconciliation, risk, and reporting orchestration
+├── repository/       Spring Data JPA repositories, specifications, and report projections
 ├── entity/           JPA entities — never exposed directly over the API
-├── dto/              Request/response DTOs — transaction/*, reconciliation/*, risk/*
+├── dto/              Request/response DTOs — transaction/*, reconciliation/*, risk/*, report/*
 ├── mapper/           Entity <-> DTO conversion — kept inline on the DTO (see below); empty so far
 ├── exception/        ResourceNotFoundException, BadRequestException, ApiError, GlobalExceptionHandler (Phase 3)
 ├── risk/             Independent rule-based risk checks
@@ -435,6 +435,45 @@ POST /api/v1/risk/evaluations/run
 Evaluates every transaction and returns `totalProcessed`, `flagsCreated`, and
 `failed`. One transaction failure does not stop the remaining evaluations.
 
+## Reporting API (Phase 6)
+
+Reporting is read-only and derived from the existing transaction,
+reconciliation-log, and risk-flag data. Aggregation happens in PostgreSQL;
+entities are not loaded into application memory to calculate the summaries.
+
+All endpoints accept optional inclusive `from` and `to` query parameters as
+ISO-8601 offset timestamps. Omitting either side leaves that side unbounded.
+If both are supplied, `from` must be before or equal to `to`.
+
+```http
+GET /api/v1/reports/transactions?from=2026-09-01T00:00:00Z&to=2026-09-30T23:59:59Z
+```
+
+Returns the transaction total, counts by status and transaction type, and
+count/amount totals grouped by currency. Monetary values in different
+currencies are deliberately never added together. The window applies to
+`transactionTimestamp`.
+
+```http
+GET /api/v1/reports/reconciliations?from=2026-09-01T00:00:00Z&to=2026-09-30T23:59:59Z
+```
+
+Returns the total reconciliation-log records and counts grouped by result.
+Because reconciliation logs are audit history, every matching historical
+record is counted. The window applies to `reconciledAt`.
+
+```http
+GET /api/v1/reports/risks?from=2026-09-01T00:00:00Z&to=2026-09-30T23:59:59Z
+```
+
+Returns the total risk flags and counts grouped by status, severity, and rule
+code. Historical resolved/dismissed flags are included. The window applies to
+`detectedAt`.
+
+All three endpoints return `200 OK`. An empty dataset produces zero totals and
+empty grouping arrays. Invalid timestamps or a reversed window return `400 Bad
+Request` using the existing error response format.
+
 ## Roadmap (phases)
 
 1. ✅ Project scaffolding, Spring Boot setup, Postgres via Docker
@@ -442,6 +481,6 @@ Evaluates every transaction and returns `totalProcessed`, `flagsCreated`, and
 3. ✅ Transaction API: create/get/list/filter/update, DTOs, validation, global error handling
 4. ✅ Reconciliation engine: reconcile/history/batch, V2 migration for currency support
 5. ✅ Risk detection engine (rule-based)
-6. Reporting endpoints
+6. ✅ Reporting endpoints: transaction, reconciliation, and risk summaries
 7. Python/Pandas analytics component
 8. Integration tests, polish, documentation pass
