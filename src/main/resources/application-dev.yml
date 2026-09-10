@@ -1,0 +1,13 @@
+spring:
+  jpa:
+    # Use Hibernate's logger in development rather than show-sql so each
+    # statement is emitted once and remains under the logging framework.
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: true
+
+logging:
+  level:
+    com.reconciliation.engine: DEBUG
+    org.hibernate.SQL: DEBUG

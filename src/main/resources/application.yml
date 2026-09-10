@@ -15,10 +15,6 @@ spring:
     # versioned, reviewable SQL migrations in src/main/resources/db/migration.
     hibernate:
       ddl-auto: validate
-    show-sql: true
-    properties:
-      hibernate:
-        format_sql: true
     open-in-view: false
 
   flyway:
@@ -35,5 +31,4 @@ server:
 
 logging:
   level:
-    com.reconciliation.engine: DEBUG
-    org.hibernate.SQL: DEBUG
+    com.reconciliation.engine: INFO

@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 
 @RestController
 @RequestMapping("/api/v1/reports")
@@ -27,24 +28,29 @@ public class ReportingController {
     public ResponseEntity<TransactionReportResponse> transactions(
             @RequestParam(required = false) OffsetDateTime from,
             @RequestParam(required = false) OffsetDateTime to) {
-        return ResponseEntity.ok(reportingService.transactions(local(from), local(to)));
+        return ResponseEntity.ok(reportingService.transactions(utc(from), utc(to)));
     }
 
     @GetMapping("/reconciliations")
     public ResponseEntity<ReconciliationReportResponse> reconciliations(
             @RequestParam(required = false) OffsetDateTime from,
             @RequestParam(required = false) OffsetDateTime to) {
-        return ResponseEntity.ok(reportingService.reconciliations(local(from), local(to)));
+        return ResponseEntity.ok(reportingService.reconciliations(utc(from), utc(to)));
     }
 
     @GetMapping("/risks")
     public ResponseEntity<RiskReportResponse> risks(
             @RequestParam(required = false) OffsetDateTime from,
             @RequestParam(required = false) OffsetDateTime to) {
-        return ResponseEntity.ok(reportingService.risks(local(from), local(to)));
+        return ResponseEntity.ok(reportingService.risks(utc(from), utc(to)));
     }
 
-    private LocalDateTime local(OffsetDateTime value) {
-        return value == null ? null : value.toLocalDateTime();
+    /**
+     * The schema stores timestamps without a zone. Normalize API values to
+     * UTC before crossing the service boundary so their instant is retained
+     * instead of silently discarding the supplied offset.
+     */
+    private LocalDateTime utc(OffsetDateTime value) {
+        return value == null ? null : LocalDateTime.ofInstant(value.toInstant(), ZoneOffset.UTC);
     }
 }

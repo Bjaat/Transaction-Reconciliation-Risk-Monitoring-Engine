@@ -42,6 +42,37 @@ class ReportingControllerTest {
     }
 
     @Test
+    void equivalentOffsetsReachServiceAsTheSameUtcInstant() throws Exception {
+        LocalDateTime instant = LocalDateTime.parse("2026-09-01T00:00:00");
+        when(reportingService.transactions(instant, instant))
+                .thenReturn(new TransactionReportResponse(
+                        instant, instant, 0, List.of(), List.of(), List.of()));
+
+        mockMvc.perform(get("/api/v1/reports/transactions")
+                        .queryParam("from", "2026-09-01T05:30:00+05:30")
+                        .queryParam("to", "2026-09-01T00:00:00Z"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.from").value("2026-09-01T00:00:00"))
+                .andExpect(jsonPath("$.to").value("2026-09-01T00:00:00"));
+    }
+
+    @Test
+    void differentOffsetsRetainTheirDifferentInstants() throws Exception {
+        LocalDateTime fromUtc = LocalDateTime.parse("2026-08-31T18:30:00");
+        LocalDateTime toUtc = LocalDateTime.parse("2026-09-01T00:00:00");
+        when(reportingService.transactions(fromUtc, toUtc))
+                .thenReturn(new TransactionReportResponse(
+                        fromUtc, toUtc, 0, List.of(), List.of(), List.of()));
+
+        mockMvc.perform(get("/api/v1/reports/transactions")
+                        .queryParam("from", "2026-09-01T00:00:00+05:30")
+                        .queryParam("to", "2026-09-01T00:00:00Z"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.from").value("2026-08-31T18:30:00"))
+                .andExpect(jsonPath("$.to").value("2026-09-01T00:00:00"));
+    }
+
+    @Test
     void returnsReconciliationSummary() throws Exception {
         when(reportingService.reconciliations(null, null))
                 .thenReturn(new ReconciliationReportResponse(null, null, 0, List.of()));

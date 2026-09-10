@@ -146,4 +146,17 @@ class RiskFlagRepositoryTest {
         assertThat(rules).extracting(row -> row.getGroupValue().toString())
                 .containsExactlyInAnyOrder("LARGE_AMOUNT", "DUPLICATE_TRANSACTION");
     }
+
+    @Test
+    void reportingQueriesReturnEmptyGroupsWhenWindowHasNoFlags() {
+        Transaction transaction = persistedTransaction("TXN-RF-EMPTY");
+        riskFlagRepository.saveAndFlush(new RiskFlag(transaction, "LARGE_AMOUNT", RiskSeverity.HIGH,
+                "Outside requested window", LocalDateTime.parse("2026-09-01T00:00:00"), RiskFlagStatus.OPEN));
+        LocalDateTime from = LocalDateTime.parse("2026-10-01T00:00:00");
+        LocalDateTime to = LocalDateTime.parse("2026-10-31T23:59:59");
+
+        assertThat(riskFlagRepository.summarizeStatus(from, to)).isEmpty();
+        assertThat(riskFlagRepository.summarizeSeverity(from, to)).isEmpty();
+        assertThat(riskFlagRepository.summarizeRule(from, to)).isEmpty();
+    }
 }

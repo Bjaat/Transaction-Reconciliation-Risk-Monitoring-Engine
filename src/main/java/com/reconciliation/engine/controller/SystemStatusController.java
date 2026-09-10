@@ -7,13 +7,9 @@ import java.time.Instant;
 import java.util.Map;
 
 /**
- * Temporary Phase-1 controller used only to confirm that the Spring Boot
- * application context, embedded web server, and routing all work end to end
- * before any real domain logic is introduced.
- *
- * This will be removed once the real /api/transactions endpoints exist and
- * we can rely on those (or a proper /actuator/health check) for the same
- * purpose.
+ * Lightweight application liveness endpoint. It deliberately performs no
+ * domain or database work, allowing callers to confirm that the web process
+ * is responsive without coupling health checks to a business API.
  */
 @RestController
 public class SystemStatusController {

@@ -7,6 +7,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -27,6 +28,9 @@ class ReconciliationLogRepositoryTest {
 
     @Autowired
     private ReconciliationLogRepository reconciliationLogRepository;
+
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
 
     @Test
     void savesAMatchedResultWithNoAmountOrStatusDifference() {
@@ -112,5 +116,33 @@ class ReconciliationLogRepositoryTest {
                 .containsExactlyInAnyOrder(
                         org.assertj.core.groups.Tuple.tuple("MATCHED", 1L),
                         org.assertj.core.groups.Tuple.tuple("MISSING_SETTLEMENT", 1L));
+    }
+
+    @Test
+    void reportingQueryReturnsEmptyGroupsWhenWindowHasNoResults() {
+        reconciliationLogRepository.saveAndFlush(new ReconciliationLog(
+                "TXN-RPT-EMPTY", "SET-RPT-EMPTY", ReconciliationStatus.MATCHED,
+                BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ZERO,
+                "COMPLETED", "SETTLED", "Outside requested window",
+                LocalDateTime.parse("2026-09-01T00:00:00")));
+
+        assertThat(reconciliationLogRepository.summarizeResults(
+                LocalDateTime.parse("2026-10-01T00:00:00"),
+                LocalDateTime.parse("2026-10-31T23:59:59"))).isEmpty();
+    }
+
+    @Test
+    void reportingTimestampIndexesAreInstalledByFlyway() {
+        Long count = jdbcTemplate.queryForObject("""
+                select count(*)
+                from pg_indexes
+                where schemaname = 'public'
+                  and indexname in (
+                    'idx_reconciliation_logs_reconciled_at',
+                    'idx_risk_flags_detected_at'
+                  )
+                """, Long.class);
+
+        assertThat(count).isEqualTo(2L);
     }
 }

@@ -129,29 +129,37 @@ class TransactionRepositoryTest {
         Account account = persistedAccount("ACC-REPORT");
         LocalDateTime from = LocalDateTime.parse("2026-09-01T00:00:00");
         LocalDateTime to = LocalDateTime.parse("2026-09-02T00:00:00");
-        transactionRepository.saveAndFlush(new Transaction("TXN-RPT-1", account, new BigDecimal("10.0000"),
+        transactionRepository.saveAndFlush(new Transaction("TXN-RPT-1", account, new BigDecimal("100.0000"),
                 "USD", TransactionType.PAYMENT, TransactionStatus.COMPLETED, from, null));
-        transactionRepository.saveAndFlush(new Transaction("TXN-RPT-2", account, new BigDecimal("20.0000"),
+        transactionRepository.saveAndFlush(new Transaction("TXN-RPT-2", account, new BigDecimal("200.0000"),
                 "USD", TransactionType.PAYMENT, TransactionStatus.COMPLETED, to, null));
-        transactionRepository.saveAndFlush(new Transaction("TXN-RPT-3", account, new BigDecimal("50.0000"),
-                "EUR", TransactionType.REFUND, TransactionStatus.FAILED, to.plusSeconds(1), null));
+        transactionRepository.saveAndFlush(new Transaction("TXN-RPT-3", account, new BigDecimal("100.0000"),
+                "EUR", TransactionType.TRANSFER, TransactionStatus.PROCESSING, from.plusHours(1), null));
+        transactionRepository.saveAndFlush(new Transaction("TXN-RPT-4", account, new BigDecimal("200.0000"),
+                "EUR", TransactionType.TRANSFER, TransactionStatus.PROCESSING, to.minusHours(1), null));
+        transactionRepository.saveAndFlush(new Transaction("TXN-RPT-5", account, new BigDecimal("999.0000"),
+                "GBP", TransactionType.REFUND, TransactionStatus.FAILED, to.plusSeconds(1), null));
 
         var statuses = transactionRepository.summarizeStatus(from, to);
         var types = transactionRepository.summarizeType(from, to);
         var amounts = transactionRepository.summarizeAmountsByCurrency(from, to);
 
-        assertThat(statuses).singleElement().satisfies(row -> {
-            assertThat(row.getGroupValue()).isEqualTo(TransactionStatus.COMPLETED);
-            assertThat(row.getTotal()).isEqualTo(2);
-        });
-        assertThat(types).singleElement().satisfies(row -> {
-            assertThat(row.getGroupValue()).isEqualTo(TransactionType.PAYMENT);
-            assertThat(row.getTotal()).isEqualTo(2);
-        });
-        assertThat(amounts).singleElement().satisfies(row -> {
-            assertThat(row.getCurrency()).isEqualTo("USD");
+        assertThat(statuses).extracting(row -> row.getGroupValue().toString(), row -> row.getTotal())
+                .containsExactlyInAnyOrder(
+                        org.assertj.core.groups.Tuple.tuple("COMPLETED", 2L),
+                        org.assertj.core.groups.Tuple.tuple("PROCESSING", 2L));
+        assertThat(types).extracting(row -> row.getGroupValue().toString(), row -> row.getTotal())
+                .containsExactlyInAnyOrder(
+                        org.assertj.core.groups.Tuple.tuple("PAYMENT", 2L),
+                        org.assertj.core.groups.Tuple.tuple("TRANSFER", 2L));
+        assertThat(amounts).hasSize(2);
+        assertThat(amounts).filteredOn(row -> row.getCurrency().equals("USD")).singleElement().satisfies(row -> {
             assertThat(row.getTransactionCount()).isEqualTo(2);
-            assertThat(row.getTotalAmount()).isEqualByComparingTo("30.0000");
+            assertThat(row.getTotalAmount()).isEqualByComparingTo(new BigDecimal("300.0000"));
+        });
+        assertThat(amounts).filteredOn(row -> row.getCurrency().equals("EUR")).singleElement().satisfies(row -> {
+            assertThat(row.getTransactionCount()).isEqualTo(2);
+            assertThat(row.getTotalAmount()).isEqualByComparingTo(new BigDecimal("300.0000"));
         });
     }
 }

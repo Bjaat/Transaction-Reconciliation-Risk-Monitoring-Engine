@@ -20,19 +20,19 @@ Controller -> Service -> Repository -> Database
 
 ```
 src/main/java/com/reconciliation/engine/
-├── config/           Spring configuration — empty so far
 ├── controller/       REST controllers for transactions, reconciliation, risk, and reporting
 ├── service/          Transaction, reconciliation, risk, and reporting orchestration
 ├── repository/       Spring Data JPA repositories, specifications, and report projections
 ├── entity/           JPA entities — never exposed directly over the API
 ├── dto/              Request/response DTOs — transaction/*, reconciliation/*, risk/*, report/*
-├── mapper/           Entity <-> DTO conversion — kept inline on the DTO (see below); empty so far
 ├── exception/        ResourceNotFoundException, BadRequestException, ApiError, GlobalExceptionHandler (Phase 3)
 ├── risk/             Independent rule-based risk checks
 └── common/           Enums + audit base classes
 
 src/main/resources/db/migration/
-└── V1__init_schema.sql   Flyway migration: creates all 5 Phase 2 tables
+├── V1__init_schema.sql                       Initial five-table schema and constraints
+├── V2__reconciliation_currency_support.sql   Reconciliation currency fields/result support
+└── V3__reporting_indexes.sql                  Reporting range-filter indexes
 ```
 
 Why this shape:
@@ -49,10 +49,10 @@ Why this shape:
 - Java 17, Spring Boot 3.3, Spring Web, Spring Data JPA
 - PostgreSQL (via Docker Compose for local dev)
 - Maven
-- JUnit 5, Mockito (added when the first service/tests are written)
+- JUnit 5, Mockito, AssertJ, MockMvc, and Testcontainers
 - Python + Pandas for the separate analytics component (`/analytics`, added later)
 
-## Running Phase 1 locally
+## Running locally
 
 ### 1. Start PostgreSQL
 
@@ -68,10 +68,15 @@ This starts a Postgres 16 container on `localhost:5432` with:
 ### 2. Run the application
 
 ```bash
-./mvnw spring-boot:run
+mvn spring-boot:run
 ```
 
-(or `mvn spring-boot:run` if you don't have the wrapper yet — see note below)
+The default profile keeps SQL logging quiet. To inspect formatted Hibernate SQL
+during development, start with the `dev` profile:
+
+```bash
+mvn spring-boot:run -Dspring-boot.run.profiles=dev
+```
 
 ### 3. Verify it's up
 
@@ -85,10 +90,7 @@ Expected response:
 {"service":"txn-reconciliation-engine","status":"UP","timestamp":"..."}
 ```
 
-> Note: no entities/tables exist yet, so the app will start and connect to
-> Postgres, but there is nothing to query yet — that's Phase 2.
-
-## Running Phase 2 locally
+## Testing and database verification
 
 ### 1. Run the tests (spins up a real Postgres container via Testcontainers — Docker must be running)
 
@@ -109,12 +111,9 @@ docker compose up -d
 mvn spring-boot:run
 ```
 
-Flyway applies `V1__init_schema.sql` automatically on startup. Watch the
-logs for a line like:
-
-```
-Successfully applied 1 migration to schema "public"
-```
+Flyway automatically applies or validates migrations `V1` through `V3` on
+startup. A fresh database is left at schema version `v3`; the startup log
+reports the exact number applied for that database.
 
 ### 3. Inspect the database
 
@@ -444,6 +443,10 @@ entities are not loaded into application memory to calculate the summaries.
 All endpoints accept optional inclusive `from` and `to` query parameters as
 ISO-8601 offset timestamps. Omitting either side leaves that side unbounded.
 If both are supplied, `from` must be before or equal to `to`.
+Offsets are preserved semantically: each value is normalized to its UTC instant
+before comparison with the existing PostgreSQL `TIMESTAMP` columns. The `from`
+and `to` values echoed in responses are therefore UTC-normalized local timestamp
+representations.
 
 ```http
 GET /api/v1/reports/transactions?from=2026-09-01T00:00:00Z&to=2026-09-30T23:59:59Z
@@ -473,6 +476,14 @@ code. Historical resolved/dismissed flags are included. The window applies to
 All three endpoints return `200 OK`. An empty dataset produces zero totals and
 empty grouping arrays. Invalid timestamps or a reversed window return `400 Bad
 Request` using the existing error response format.
+
+### Reporting indexes (V3 migration)
+
+`V3__reporting_indexes.sql` adds one index on
+`reconciliation_logs.reconciled_at` and one on `risk_flags.detected_at`. These
+columns are the range predicates used by their respective reports. Transaction
+reporting already uses the timestamp index created in `V1`; no redundant or
+speculative composite indexes are added.
 
 ## Roadmap (phases)
 
