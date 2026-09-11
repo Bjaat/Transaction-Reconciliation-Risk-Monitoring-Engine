@@ -4,11 +4,11 @@ A backend system that simulates a financial transaction-processing pipeline:
 ingestion → validation → risk detection → persistence → settlement →
 reconciliation → reporting/analytics.
 
-Built as a **modular monolith** with Spring Boot, PostgreSQL, and a separate
-Python/Pandas analytics component that consumes exported data.
+Built as a **modular monolith** with Spring Boot and PostgreSQL, plus a separate
+read-only Python/Pandas analytics component over the same database.
 
-> **Status:** Phase 6 — read-only transaction, reconciliation, and risk reporting endpoints with optional time-window filtering.
-> The separate Python/Pandas analytics component is not implemented yet.
+> **Status:** Phase 7 — transaction, reconciliation, and risk analytics with
+> exact currency totals, UTC trends, and CSV/JSON outputs.
 
 ## Architecture
 
@@ -16,6 +16,12 @@ Layered architecture, enforced by package structure:
 
 ```
 Controller -> Service -> Repository -> Database
+                                      |
+                                      v
+                              Python/Pandas analytics
+                                      |
+                                      v
+                                 CSV + JSON
 ```
 
 ```
@@ -33,6 +39,12 @@ src/main/resources/db/migration/
 ├── V1__init_schema.sql                       Initial five-table schema and constraints
 ├── V2__reconciliation_currency_support.sql   Reconciliation currency fields/result support
 └── V3__reporting_indexes.sql                  Reporting range-filter indexes
+
+analytics/
+├── config.py, database.py, loaders.py         Secure read-only PostgreSQL ingestion
+├── *_analysis.py                              Pure Pandas transformations
+├── report.py, main.py                         CSV/JSON generation and CLI
+└── tests/                                     Database-independent Python tests
 ```
 
 Why this shape:
@@ -50,7 +62,7 @@ Why this shape:
 - PostgreSQL (via Docker Compose for local dev)
 - Maven
 - JUnit 5, Mockito, AssertJ, MockMvc, and Testcontainers
-- Python + Pandas for the separate analytics component (`/analytics`, added later)
+- Python 3.11+, Pandas, and psycopg for the separate analytics component (`/analytics`)
 
 ## Running locally
 
@@ -485,6 +497,43 @@ columns are the range predicates used by their respective reports. Transaction
 reporting already uses the timestamp index created in `V1`; no redundant or
 speculative composite indexes are added.
 
+## Python/Pandas Analytics (Phase 7)
+
+Phase 7 reads the existing PostgreSQL data directly through a read-only
+`psycopg` session. It selects only the fields required from `transactions`,
+`reconciliation_logs`, and `risk_flags`; risk records are joined to
+`transactions` only to recover the transaction business reference. SQL window
+values are parameterized.
+
+The analytics include exact transaction totals and averages by currency,
+transaction status/type distributions, reconciliation outcome and rate
+metrics, risk status/severity/rule distributions, transactions with multiple
+risk flags, high-severity activity, and UTC daily trends. It generates
+machine-readable CSV files and a JSON summary rather than adding a second API
+or duplicating Java business logic.
+
+Setup and execution:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r analytics\requirements.txt
+
+$env:DB_HOST = "localhost"
+$env:DB_PORT = "5432"
+$env:DB_NAME = "reconciliation_db"
+$env:DB_USER = "reconciliation_user"
+$env:DB_PASSWORD = "your-local-password"
+
+python -m analytics
+python -m unittest discover -s analytics\tests -v
+```
+
+Optional inclusive `--from` and `--to` values must be ISO-8601 timestamps with
+offsets. Use `--output <directory>` to override `analytics/output`. Generated
+reports are ignored by Git. See `analytics/README.md` for the complete output
+inventory, UTC semantics, and least-privilege database guidance.
+
 ## Roadmap (phases)
 
 1. ✅ Project scaffolding, Spring Boot setup, Postgres via Docker
@@ -493,5 +542,5 @@ speculative composite indexes are added.
 4. ✅ Reconciliation engine: reconcile/history/batch, V2 migration for currency support
 5. ✅ Risk detection engine (rule-based)
 6. ✅ Reporting endpoints: transaction, reconciliation, and risk summaries
-7. Python/Pandas analytics component
+7. ✅ Python/Pandas analytics component
 8. Integration tests, polish, documentation pass
