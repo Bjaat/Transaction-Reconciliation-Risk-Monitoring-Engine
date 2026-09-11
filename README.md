@@ -1,546 +1,570 @@
 # Transaction Reconciliation & Risk Monitoring Engine
 
-A backend system that simulates a financial transaction-processing pipeline:
-ingestion → validation → risk detection → persistence → settlement →
-reconciliation → reporting/analytics.
+A financial transaction processing and monitoring backend built with **Java 17, Spring Boot, PostgreSQL, and Python/Pandas**.
 
-Built as a **modular monolith** with Spring Boot and PostgreSQL, plus a separate
-read-only Python/Pandas analytics component over the same database.
+The system processes transactions, performs settlement reconciliation, detects rule-based risk conditions, maintains audit history, provides reporting APIs, and exposes a separate read-only Python/Pandas analytics layer.
 
-> **Status:** Phase 7 — transaction, reconciliation, and risk analytics with
-> exact currency totals, UTC trends, and CSV/JSON outputs.
+## Project Status
+
+**Completed through Phase 7 — Core backend, reconciliation, risk monitoring, reporting, and Python/Pandas analytics.**
+
+The project is intentionally designed as a **modular monolith** rather than a microservices system. The goal is to demonstrate production-oriented backend engineering, database design, financial data correctness, testing, reconciliation, risk detection, and analytics without introducing unnecessary distributed-system complexity.
+
+---
 
 ## Architecture
 
-Layered architecture, enforced by package structure:
-
+```text
+                         ┌─────────────────────────┐
+                         │       REST Clients      │
+                         └────────────┬────────────┘
+                                      │
+                                      ▼
+                         ┌─────────────────────────┐
+                         │   Spring Boot Backend   │
+                         │                         │
+                         │ Controllers             │
+                         │      ↓                  │
+                         │ Services                │
+                         │      ↓                  │
+                         │ Repositories            │
+                         └────────────┬────────────┘
+                                      │
+                                      ▼
+                         ┌─────────────────────────┐
+                         │       PostgreSQL        │
+                         │                         │
+                         │ Transactions            │
+                         │ Settlements             │
+                         │ Risk Flags              │
+                         │ Reconciliation Logs     │
+                         └────────────┬────────────┘
+                                      │
+                              Read-only SQL
+                                      │
+                                      ▼
+                         ┌─────────────────────────┐
+                         │    Python / Pandas      │
+                         │      Analytics          │
+                         │                         │
+                         │ Aggregations             │
+                         │ Trends                   │
+                         │ Risk metrics             │
+                         │ Reconciliation metrics   │
+                         │ CSV / JSON reports       │
+                         └─────────────────────────┘
 ```
-Controller -> Service -> Repository -> Database
-                                      |
-                                      v
-                              Python/Pandas analytics
-                                      |
-                                      v
-                                 CSV + JSON
+
+The Java/Spring Boot application remains the **system of record**. The Python component is an analytics layer that reads PostgreSQL data without modifying the database.
+
+---
+
+## Core Features
+
+### 1. Transaction Management
+
+REST APIs for:
+
+* Creating transactions
+* Retrieving transactions
+* Listing and paginating transactions
+* Filtering transactions
+* Updating supported transaction fields
+* Bean validation
+* Consistent API error responses
+
+Supported transaction types include:
+
+```text
+DEPOSIT
+WITHDRAWAL
+TRANSFER
+PAYMENT
+REFUND
 ```
 
+Transactions use explicit business references and monetary values stored using PostgreSQL `NUMERIC(19,4)` rather than floating-point types.
+
+---
+
+### 2. PostgreSQL Persistence
+
+The backend uses:
+
+* PostgreSQL 16
+* Spring Data JPA
+* Hibernate
+* Flyway database migrations
+* Database-side constraints and indexes
+
+Flyway owns schema creation and migrations while Hibernate is configured to **validate** the existing schema rather than modify it automatically.
+
+Migrations currently include:
+
+```text
+V1 - Initial schema
+V2 - Reconciliation currency support
+V3 - Reporting timestamp indexes
 ```
-src/main/java/com/reconciliation/engine/
-├── controller/       REST controllers for transactions, reconciliation, risk, and reporting
-├── service/          Transaction, reconciliation, risk, and reporting orchestration
-├── repository/       Spring Data JPA repositories, specifications, and report projections
-├── entity/           JPA entities — never exposed directly over the API
-├── dto/              Request/response DTOs — transaction/*, reconciliation/*, risk/*, report/*
-├── exception/        ResourceNotFoundException, BadRequestException, ApiError, GlobalExceptionHandler (Phase 3)
-├── risk/             Independent rule-based risk checks
-└── common/           Enums + audit base classes
 
-src/main/resources/db/migration/
-├── V1__init_schema.sql                       Initial five-table schema and constraints
-├── V2__reconciliation_currency_support.sql   Reconciliation currency fields/result support
-└── V3__reporting_indexes.sql                  Reporting range-filter indexes
+---
 
-analytics/
-├── config.py, database.py, loaders.py         Secure read-only PostgreSQL ingestion
-├── *_analysis.py                              Pure Pandas transformations
-├── report.py, main.py                         CSV/JSON generation and CLI
-└── tests/                                     Database-independent Python tests
+### 3. Settlement & Reconciliation
+
+The reconciliation engine compares transaction and settlement information and classifies reconciliation outcomes.
+
+Supported outcomes include:
+
+```text
+MATCHED
+MISSING_SETTLEMENT
+DUPLICATE_SETTLEMENT
+CURRENCY_MISMATCH
+AMOUNT_MISMATCH
+STATUS_MISMATCH
 ```
 
-Why this shape:
-- **Entities never cross the API boundary** — controllers only ever see DTOs,
-  so we can change the database schema without breaking API consumers.
-- **Risk rules live in their own package**, one rule = one class, instead of
-  one large `RiskService` method with a wall of `if` statements.
-- **No microservices** — a single deployable unit is enough to demonstrate
-  every skill this project is meant to showcase, without the operational
-  overhead of distributed systems for something this size.
+Transaction and settlement status mappings are explicitly defined rather than relying on string equality.
 
-## Tech stack
+Reconciliation results are persisted as **append-only reconciliation history**, providing an audit trail of reconciliation attempts.
 
-- Java 17, Spring Boot 3.3, Spring Web, Spring Data JPA
-- PostgreSQL (via Docker Compose for local dev)
-- Maven
-- JUnit 5, Mockito, AssertJ, MockMvc, and Testcontainers
-- Python 3.11+, Pandas, and psycopg for the separate analytics component (`/analytics`)
+---
 
-## Running locally
+### 4. Rule-Based Risk Detection
 
-### 1. Start PostgreSQL
+Risk detection uses an extensible `RiskRule` architecture.
 
-```bash
+Current rules include:
+
+```text
+LARGE_AMOUNT
+DUPLICATE_TRANSACTION
+```
+
+The architecture allows additional rules to be added independently without turning the risk engine into one large conditional method.
+
+Risk flags maintain:
+
+* Rule code
+* Severity
+* Status
+* Detection timestamp
+* Associated transaction
+* Historical records
+
+A PostgreSQL partial unique index prevents duplicate **OPEN** risk flags for the same transaction and rule while still allowing historical flags to remain stored.
+
+---
+
+### 5. Reporting API
+
+Read-only reporting endpoints provide database-side aggregation for:
+
+```text
+Transaction reports
+Reconciliation reports
+Risk reports
+```
+
+Transaction reporting includes:
+
+* Total transaction counts
+* Counts by status
+* Counts by transaction type
+* Currency-separated totals
+* Currency-separated monetary amounts
+
+Reconciliation reporting includes:
+
+* Total reconciliation attempts
+* Outcome distributions
+
+Risk reporting includes:
+
+* Total risk flags
+* Status distribution
+* Severity distribution
+* Rule distribution
+
+Optional UTC-normalized time windows can be supplied using `from` and `to` parameters.
+
+Aggregations are performed in PostgreSQL rather than loading the entire dataset into Java memory.
+
+---
+
+## Python / Pandas Analytics
+
+Phase 7 adds a separate Python analytics component.
+
+```text
+PostgreSQL
+    ↓
+Read-only parameterized SQL
+    ↓
+Pandas DataFrames
+    ↓
+Analytics
+    ↓
+CSV / JSON reports
+```
+
+The analytics component provides:
+
+### Transaction analytics
+
+* Exact transaction totals and averages by currency
+* Transaction status distributions
+* Transaction type distributions
+* Daily transaction trends
+* Currency-separated financial metrics
+
+### Reconciliation analytics
+
+* Reconciliation outcome counts
+* Reconciliation rates
+* Mismatch rates
+* Daily reconciliation trends
+
+### Risk analytics
+
+* Risk status distributions
+* Risk severity distributions
+* Risk rule distributions
+* Open risk flag metrics
+* High-severity risk metrics
+* Transactions with multiple risk flags
+* Daily risk trends
+
+The analytics CLI supports inclusive `--from` and `--to` filtering using offset-aware timestamps.
+
+Financial amounts remain represented using `Decimal`, and currencies are never combined into a single monetary total.
+
+---
+
+## Financial Data Correctness
+
+Several design decisions specifically address financial data handling.
+
+### Monetary values
+
+Financial amounts use:
+
+```text
+NUMERIC(19,4)
+```
+
+rather than floating-point types.
+
+This avoids binary floating-point representation problems for monetary calculations.
+
+### Currency separation
+
+Amounts from different currencies are never combined.
+
+For example:
+
+```text
+INR totals
+USD totals
+EUR totals
+```
+
+remain separate metrics.
+
+### Timestamp handling
+
+Timestamp filters are normalized through UTC instants.
+
+Offset-aware inputs are converted to their corresponding UTC instant before database filtering, preventing accidental loss of timezone information.
+
+---
+
+## Database Design
+
+The main domain tables include:
+
+```text
+accounts
+transactions
+settlements
+risk_flags
+reconciliation_logs
+```
+
+Important design choices include:
+
+### Risk flag foreign key
+
+`risk_flags` maintains a real foreign-key relationship to transactions because a risk flag is generated from a known internal transaction.
+
+### Settlement business reference
+
+Settlement and reconciliation data use business transaction references where appropriate because unmatched external settlement data is a valid reconciliation condition.
+
+### Partial unique index
+
+The risk system uses a partial unique index conceptually equivalent to:
+
+```sql
+UNIQUE (transaction_id, rule_code)
+WHERE status = 'OPEN'
+```
+
+This prevents duplicate active alerts without deleting historical risk records.
+
+---
+
+## Testing
+
+The project uses multiple levels of testing.
+
+### Java
+
+* JUnit 5
+* Mockito
+* AssertJ
+* Spring Boot Test
+* MockMvc
+* Testcontainers
+* Real PostgreSQL integration tests
+
+Database-specific behavior is tested against PostgreSQL rather than relying exclusively on an in-memory database.
+
+### Python
+
+The Phase 7 analytics component contains automated tests covering:
+
+* Financial calculations
+* Currency separation
+* Distributions
+* Reconciliation metrics
+* Risk metrics
+* Timestamp filtering
+* Empty datasets
+* Report generation
+
+Phase 7 Python testing completed with:
+
+```text
+29 tests
+29 passed
+0 failed
+0 skipped
+```
+
+The Java project contains the broader backend test suite covering persistence, APIs, reconciliation, risk detection, and reporting.
+
+---
+
+## Local Development
+
+### Requirements
+
+Install:
+
+* Java 17
+* Maven 3.9+
+* Docker Desktop
+* PostgreSQL 16 if running PostgreSQL outside Docker
+* Python 3.x for the analytics component
+
+---
+
+## Start PostgreSQL
+
+From the project root:
+
+```powershell
 docker compose up -d
 ```
 
-This starts a Postgres 16 container on `localhost:5432` with:
-- database: `reconciliation_db`
-- user: `reconciliation_user`
-- password: `reconciliation_pass`
+The development database is configured through the project's Docker Compose configuration.
 
-### 2. Run the application
+---
 
-```bash
+## Run the Spring Boot application
+
+```powershell
 mvn spring-boot:run
 ```
 
-The default profile keeps SQL logging quiet. To inspect formatted Hibernate SQL
-during development, start with the `dev` profile:
+The application starts on:
 
-```bash
-mvn spring-boot:run -Dspring-boot.run.profiles=dev
+```text
+http://localhost:8080
 ```
 
-### 3. Verify it's up
+Health/status endpoint:
 
-```bash
-curl http://localhost:8080/api/status
+```text
+GET /api/status
 ```
 
-Expected response:
+---
 
-```json
-{"service":"txn-reconciliation-engine","status":"UP","timestamp":"..."}
-```
+## Run Java tests
 
-## Testing and database verification
+Docker Desktop should be running because integration tests use Testcontainers.
 
-### 1. Run the tests (spins up a real Postgres container via Testcontainers — Docker must be running)
-
-```bash
+```powershell
 mvn clean test
 ```
 
-> **Troubleshooting — "Could not find a valid Docker environment" / `BadRequestException (Status 400)`**
-> If `docker version` and `docker run hello-world` both work fine but `mvn clean test` still fails this way, you're hitting a known Testcontainers-vs-Docker-Engine-29 API version mismatch (Docker Engine 29+ requires API ≥ 1.44; older Testcontainers versions don't negotiate it automatically). It's fixed by `src/test/resources/docker-java.properties`, already included in this project, which pins `api.version=1.44`.
->
-> **Troubleshooting — "Mapped port can only be obtained after the container is started"**
-> This happens if a PostgreSQL Testcontainer is shared across multiple test classes via a base class and started manually (the "singleton container" pattern) — Spring's `@ServiceConnection` support relies on the JUnit `@Testcontainers` extension itself starting the container, and doesn't reliably pick up a manually-started one shared from elsewhere. Each repository test class here declares and starts its own container directly with `@Testcontainers` + `@Container @ServiceConnection`, which avoids this.
+### Docker Engine 29 / Testcontainers compatibility
 
-### 2. Start Postgres for the running app, then the app itself
+The project includes:
 
-```bash
-docker compose up -d
-mvn spring-boot:run
+```text
+src/test/resources/docker-java.properties
 ```
 
-Flyway automatically applies or validates migrations `V1` through `V3` on
-startup. A fresh database is left at schema version `v3`; the startup log
-reports the exact number applied for that database.
+with the required Docker API configuration:
 
-### 3. Inspect the database
-
-```bash
-docker exec -it reconciliation-postgres psql -U reconciliation_user -d reconciliation_db
+```properties
+api.version=1.44
 ```
 
-Then, inside `psql`:
+This is intentionally retained for compatibility with the Docker/Testcontainers setup used by the project.
 
-```sql
--- List all tables
-\dt
+---
 
--- Inspect a table's columns, constraints, and indexes
-\d accounts
-\d transactions
-\d settlements
-\d risk_flags
-\d reconciliation_logs
+## Python Analytics
 
--- Confirm Flyway's own bookkeeping table exists and shows the migration as applied
-SELECT version, description, success FROM flyway_schema_history;
+The Phase 7 analytics component reads from PostgreSQL using a read-only database connection.
 
--- Confirm the partial unique index on risk_flags exists
-SELECT indexname, indexdef FROM pg_indexes WHERE tablename = 'risk_flags';
+The analytics component does **not** modify application data.
+
+Typical workflow:
+
+```text
+Start PostgreSQL
+      ↓
+Populate application data
+      ↓
+Run Python analytics
+      ↓
+Generate CSV / JSON reports
 ```
 
-## Transaction API (Phase 3)
+Generated reports are not intended to be committed to Git.
 
-All endpoints are under `/api/v1/transactions`. Entities are never returned
-directly — every response is a DTO (`TransactionResponse`).
+---
 
-> **Note on field naming vs. the schema:** `accountId` in query params and
-> `accountNumber` in request/response bodies both refer to the business
-> `Account.accountNumber` (e.g. `"ACC-1001"`), not the internal database id.
-> `transactionReference` is the client/upstream-assigned business identifier;
-> `externalReference` is a separate, optional upstream-processor reference.
-> There is no `description` field — it isn't part of the Phase 2 schema, and
-> adding one was out of scope for this phase (see Known Limitations below).
+## Project Structure
 
-### Create
-
-```http
-POST /api/v1/transactions
-Content-Type: application/json
-
-{
-  "transactionReference": "BANK-TXN-10001",
-  "accountNumber": "ACC-1001",
-  "amount": 12500.50,
-  "currency": "INR",
-  "transactionType": "PAYMENT",
-  "transactionTimestamp": "2026-08-30T10:30:00",
-  "externalReference": "PSP-REF-88213"
-}
+```text
+src/
+├── main/
+│   ├── java/com/reconciliation/engine/
+│   │   ├── common/
+│   │   ├── config/
+│   │   ├── controller/
+│   │   ├── dto/
+│   │   ├── entity/
+│   │   ├── exception/
+│   │   ├── reconciliation/
+│   │   ├── repository/
+│   │   ├── risk/
+│   │   └── service/
+│   │
+│   └── resources/
+│       ├── db/migration/
+│       └── application.yml
+│
+└── test/
+    └── java/
+        └── com/reconciliation/engine/
+│
+└── <Python analytics component>
+│
+├── pom.xml
+├── docker-compose.yml
+├── .gitignore
+└── README.md
 ```
 
-`transactionType` must be one of `DEPOSIT`, `WITHDRAWAL`, `TRANSFER`,
-`PAYMENT`, `REFUND`. The transaction is always created with
-`status: PENDING` — a client cannot set the initial status.
+---
 
-Response: `201 Created`
+## Why a Modular Monolith?
 
-```json
-{
-  "id": 42,
-  "transactionReference": "BANK-TXN-10001",
-  "accountNumber": "ACC-1001",
-  "amount": 12500.5000,
-  "currency": "INR",
-  "transactionType": "PAYMENT",
-  "status": "PENDING",
-  "transactionTimestamp": "2026-08-30T10:30:00",
-  "externalReference": "PSP-REF-88213",
-  "createdAt": "2026-08-30T10:30:05.123",
-  "updatedAt": "2026-08-30T10:30:05.123"
-}
+The project deliberately uses a modular monolith instead of microservices.
+
+For the scope of this system, a modular monolith provides:
+
+* Clear separation of business domains
+* Simple deployment
+* Transactional database access
+* Easier local development
+* Lower operational complexity
+* Enough architectural structure to evolve individual modules
+
+Microservices, Kafka, Redis, Spark, and other distributed infrastructure were intentionally avoided because they would add operational complexity without providing meaningful value at this project scale.
+
+---
+
+## Key Engineering Decisions
+
+| Decision                        | Reason                                           |
+| ------------------------------- | ------------------------------------------------ |
+| Java 17                         | Stable LTS Java platform                         |
+| Spring Boot                     | Mature backend ecosystem                         |
+| PostgreSQL                      | Relational integrity and strong SQL capabilities |
+| Flyway                          | Version-controlled database migrations           |
+| Hibernate validation            | Prevents ORM from silently changing schema       |
+| `NUMERIC(19,4)`                 | Correct monetary representation                  |
+| DTOs                            | Keeps entities out of the API boundary           |
+| Rule-based risk architecture    | Easy to extend with new rules                    |
+| Partial unique index            | Prevents duplicate open risk alerts              |
+| Append-only reconciliation logs | Auditability                                     |
+| PostgreSQL aggregation          | Efficient reporting at database level            |
+| Testcontainers                  | Tests real PostgreSQL behavior                   |
+| Python/Pandas                   | Flexible analytical processing                   |
+| Read-only analytics DB access   | Keeps Java backend as system of record           |
+| UTC normalization               | Consistent timestamp filtering                   |
+
+---
+
+## Development Roadmap
+
+```text
+Phase 1  ✅ Project foundation
+Phase 2  ✅ Persistence and database schema
+Phase 3  ✅ Transaction REST API
+Phase 4  ✅ Settlement reconciliation
+Phase 5  ✅ Rule-based risk detection
+Phase 6  ✅ Reporting and analytics API
+Phase 6  ✅ Hardening and integration improvements
+Phase 7  ✅ Python/Pandas analytics
 ```
 
-`404 Not Found` if `accountNumber` doesn't match an existing account.
-`400 Bad Request` with `fieldErrors` for validation failures.
-`409 Conflict` if `transactionReference` already exists.
+The core planned implementation is complete. Future work would focus on production hardening rather than adding unnecessary functionality.
 
-### Get
+---
 
-```http
-GET /api/v1/transactions/{id}
-```
+## Future Production Considerations
 
-`{id}` is the internal numeric id (the `id` field in the response above, not
-`transactionReference`). Returns `200 OK` or `404 Not Found`.
+If this system were moved toward production scale, potential next steps would include:
 
-### List / Filter
+* Authentication and authorization
+* API rate limiting
+* Structured logging
+* Metrics and distributed tracing
+* Optimistic locking/concurrency controls
+* Idempotency keys for transaction ingestion
+* Background/batch reconciliation
+* Partitioning for very large transaction tables
+* More advanced risk rules
+* CI/CD pipelines
+* Secret management
+* Database backup and recovery strategy
+* Load and performance testing
 
-```http
-GET /api/v1/transactions?page=0&size=20
-GET /api/v1/transactions?accountId=ACC-1001
-GET /api/v1/transactions?status=COMPLETED
-GET /api/v1/transactions?transactionType=PAYMENT
-GET /api/v1/transactions?currency=INR
-GET /api/v1/transactions?from=2026-08-01T00:00:00Z&to=2026-08-30T23:59:59Z
-GET /api/v1/transactions?minAmount=1000&maxAmount=50000
-```
+These are deliberately treated as production evolution rather than requirements for the current project scope.
 
-All filters are optional and combinable. `status`/`transactionType` values
-are validated against the real enums — an unrecognized value returns `400`,
-not a silently-empty result. Response:
+---
 
-```json
-{
-  "content": [ { "...": "TransactionResponse" } ],
-  "page": 0,
-  "size": 20,
-  "totalElements": 137,
-  "totalPages": 7,
-  "first": true,
-  "last": false
-}
-```
+## Author
 
-### Update
+**Bjaat**
 
-```http
-PUT /api/v1/transactions/{id}
-Content-Type: application/json
-
-{
-  "status": "COMPLETED",
-  "externalReference": "PSP-REF-88213-CONFIRMED"
-}
-```
-
-Only `status` and `externalReference` are mutable. `transactionReference`,
-`accountNumber`, `amount`, `currency`, `transactionType`, and
-`transactionTimestamp` cannot be changed after creation — they aren't even
-fields on `UpdateTransactionRequest`, so there's no way to submit them.
-No status-transition rules are enforced yet (any valid enum value is
-accepted); that belongs to a later phase.
-
-Returns `200 OK` with the updated `TransactionResponse`, or `404 Not Found`.
-
-### Errors
-
-Every error follows the same shape:
-
-```json
-{
-  "timestamp": "2026-08-30T10:30:00",
-  "status": 400,
-  "error": "Bad Request",
-  "message": "Validation failed",
-  "path": "/api/v1/transactions",
-  "fieldErrors": {
-    "amount": "must be greater than 0",
-    "currency": "must be a 3-letter ISO 4217 code"
-  }
-}
-```
-
-`fieldErrors` is omitted (not present in the JSON) for non-validation
-errors. Unexpected server errors return `500` with a generic message — the
-real exception is logged server-side, never returned to the client.
-
-### Known limitations (Phase 3)
-
-- No `description`/notes field — not part of the Phase 2 schema; would need
-  a new migration, which was out of scope here.
-- No optimistic locking (`@Version`) on `Transaction` yet — concurrent
-  updates to the same transaction can overwrite each other silently. Worth
-  adding before this becomes a multi-writer system.
-- `PUT` fully replaces the mutable fields rather than supporting partial
-  (`PATCH`-style) updates — acceptable given there are only two mutable
-  fields today, but worth revisiting if more become mutable later.
-- No idempotency handling beyond the database's unique constraint on
-  `transaction_reference` (a resubmitted create returns `409`, not the
-  original `201` response).
-
-
-
-## Reconciliation API (Phase 4)
-
-Compares a transaction against settlement data (matched by business
-`transactionReference`) and persists the outcome as a `ReconciliationLog`.
-Reconciliation is **not idempotent by design** — each call appends a new
-history entry rather than overwriting the last one, so re-running
-reconciliation after a settlement arrives late preserves the earlier
-`MISSING_SETTLEMENT` result alongside the later `MATCHED` one.
-
-### Matching rules
-
-For a transaction's settlements (found by the same `transactionReference`),
-in order:
-
-1. Zero settlements found → `MISSING_SETTLEMENT`
-2. More than one settlement found → `DUPLICATE_SETTLEMENT`
-3. Exactly one settlement found, then checked in this order:
-   - Currencies differ → `CURRENCY_MISMATCH`
-   - Amounts differ → `AMOUNT_MISMATCH`
-   - Statuses disagree → `STATUS_MISMATCH` (mapping: `COMPLETED`↔`SETTLED`,
-     `FAILED`↔`FAILED`, `REVERSED`↔`REVERSED`, `PENDING`/`PROCESSING`↔`PENDING`
-     — `TransactionStatus` and `SettlementStatus` don't share values, so this
-     mapping is a documented assumption, not a database-enforced rule)
-   - Otherwise → `MATCHED`
-
-### Reconcile a transaction
-
-```http
-POST /api/v1/reconciliations
-Content-Type: application/json
-
-{ "transactionReference": "BANK-TXN-10001" }
-```
-
-Response: `201 Created`
-
-```json
-{
-  "id": 7,
-  "transactionReference": "BANK-TXN-10001",
-  "settlementReference": "PSP-REF-88213",
-  "status": "MATCHED",
-  "expectedAmount": 12500.5000,
-  "actualAmount": 12500.5000,
-  "expectedCurrency": "INR",
-  "actualCurrency": "INR",
-  "expectedStatus": "COMPLETED",
-  "actualStatus": "SETTLED",
-  "explanation": "Transaction and settlement match on amount, currency, and status",
-  "reconciledAt": "2026-08-30T11:00:00"
-}
-```
-
-`404 Not Found` if the transaction reference doesn't exist. `400 Bad Request`
-if the request body fails validation.
-
-### Reconciliation history
-
-```http
-GET /api/v1/reconciliations/{transactionReference}
-```
-
-Returns a JSON array of every past reconciliation result for that
-transaction, newest first. `404` if the transaction itself doesn't exist;
-an empty array (not an error) if it exists but has never been reconciled.
-
-### Batch reconciliation
-
-```http
-POST /api/v1/reconciliations/run
-```
-
-Reconciles every transaction currently in the system. One transaction
-failing doesn't stop the rest — failures are tallied, not thrown. Response:
-
-```json
-{
-  "totalProcessed": 137,
-  "matched": 110,
-  "amountMismatch": 8,
-  "currencyMismatch": 2,
-  "statusMismatch": 5,
-  "missingSettlement": 11,
-  "duplicateSettlement": 1,
-  "failed": 0
-}
-```
-
-### Database changes (V2 migration)
-
-`V1` is untouched. `V2__reconciliation_currency_support.sql` adds
-`expected_currency`/`actual_currency` columns to `reconciliation_logs` and
-widens the `result` `CHECK` constraint to allow `CURRENCY_MISMATCH` — both
-genuinely required to satisfy the API response shape and matching rules
-above; nothing else about the schema changed.
-
-## Risk Detection API (Phase 5)
-
-Risk rules are independent `RiskRule` implementations. An evaluation persists a
-new `OPEN` flag only when that transaction/rule pair has no existing open flag,
-preserving the database's partial-unique-index invariant.
-
-Implemented rules:
-
-- `LARGE_AMOUNT` (`HIGH`) — amount is at least `risk.rules.large-amount-threshold`
-  (default `10000`).
-- `DUPLICATE_TRANSACTION` (`CRITICAL`) — a nonblank upstream
-  `externalReference` is shared by at least two transactions.
-
-### Evaluate one transaction
-
-```http
-POST /api/v1/risk/evaluations
-Content-Type: application/json
-
-{ "transactionReference": "BANK-TXN-10001" }
-```
-
-Returns `201 Created` with the number of rules evaluated and only the flags
-created by this run. Repeating the request while those flags remain `OPEN`
-returns an empty `flagsCreated` array. Unknown transactions return `404`;
-invalid requests return `400` using the existing error format.
-
-### Risk-flag history
-
-```http
-GET /api/v1/risk/flags/{transactionReference}
-```
-
-Returns all flags newest first. An existing transaction with no flags returns
-an empty array; an unknown transaction returns `404`.
-
-### Batch evaluation
-
-```http
-POST /api/v1/risk/evaluations/run
-```
-
-Evaluates every transaction and returns `totalProcessed`, `flagsCreated`, and
-`failed`. One transaction failure does not stop the remaining evaluations.
-
-## Reporting API (Phase 6)
-
-Reporting is read-only and derived from the existing transaction,
-reconciliation-log, and risk-flag data. Aggregation happens in PostgreSQL;
-entities are not loaded into application memory to calculate the summaries.
-
-All endpoints accept optional inclusive `from` and `to` query parameters as
-ISO-8601 offset timestamps. Omitting either side leaves that side unbounded.
-If both are supplied, `from` must be before or equal to `to`.
-Offsets are preserved semantically: each value is normalized to its UTC instant
-before comparison with the existing PostgreSQL `TIMESTAMP` columns. The `from`
-and `to` values echoed in responses are therefore UTC-normalized local timestamp
-representations.
-
-```http
-GET /api/v1/reports/transactions?from=2026-09-01T00:00:00Z&to=2026-09-30T23:59:59Z
-```
-
-Returns the transaction total, counts by status and transaction type, and
-count/amount totals grouped by currency. Monetary values in different
-currencies are deliberately never added together. The window applies to
-`transactionTimestamp`.
-
-```http
-GET /api/v1/reports/reconciliations?from=2026-09-01T00:00:00Z&to=2026-09-30T23:59:59Z
-```
-
-Returns the total reconciliation-log records and counts grouped by result.
-Because reconciliation logs are audit history, every matching historical
-record is counted. The window applies to `reconciledAt`.
-
-```http
-GET /api/v1/reports/risks?from=2026-09-01T00:00:00Z&to=2026-09-30T23:59:59Z
-```
-
-Returns the total risk flags and counts grouped by status, severity, and rule
-code. Historical resolved/dismissed flags are included. The window applies to
-`detectedAt`.
-
-All three endpoints return `200 OK`. An empty dataset produces zero totals and
-empty grouping arrays. Invalid timestamps or a reversed window return `400 Bad
-Request` using the existing error response format.
-
-### Reporting indexes (V3 migration)
-
-`V3__reporting_indexes.sql` adds one index on
-`reconciliation_logs.reconciled_at` and one on `risk_flags.detected_at`. These
-columns are the range predicates used by their respective reports. Transaction
-reporting already uses the timestamp index created in `V1`; no redundant or
-speculative composite indexes are added.
-
-## Python/Pandas Analytics (Phase 7)
-
-Phase 7 reads the existing PostgreSQL data directly through a read-only
-`psycopg` session. It selects only the fields required from `transactions`,
-`reconciliation_logs`, and `risk_flags`; risk records are joined to
-`transactions` only to recover the transaction business reference. SQL window
-values are parameterized.
-
-The analytics include exact transaction totals and averages by currency,
-transaction status/type distributions, reconciliation outcome and rate
-metrics, risk status/severity/rule distributions, transactions with multiple
-risk flags, high-severity activity, and UTC daily trends. It generates
-machine-readable CSV files and a JSON summary rather than adding a second API
-or duplicating Java business logic.
-
-Setup and execution:
-
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -r analytics\requirements.txt
-
-$env:DB_HOST = "localhost"
-$env:DB_PORT = "5432"
-$env:DB_NAME = "reconciliation_db"
-$env:DB_USER = "reconciliation_user"
-$env:DB_PASSWORD = "your-local-password"
-
-python -m analytics
-python -m unittest discover -s analytics\tests -v
-```
-
-Optional inclusive `--from` and `--to` values must be ISO-8601 timestamps with
-offsets. Use `--output <directory>` to override `analytics/output`. Generated
-reports are ignored by Git. See `analytics/README.md` for the complete output
-inventory, UTC semantics, and least-privilege database guidance.
-
-## Roadmap (phases)
-
-1. ✅ Project scaffolding, Spring Boot setup, Postgres via Docker
-2. ✅ Database schema (Flyway), JPA entities, repositories
-3. ✅ Transaction API: create/get/list/filter/update, DTOs, validation, global error handling
-4. ✅ Reconciliation engine: reconcile/history/batch, V2 migration for currency support
-5. ✅ Risk detection engine (rule-based)
-6. ✅ Reporting endpoints: transaction, reconciliation, and risk summaries
-7. ✅ Python/Pandas analytics component
-8. Integration tests, polish, documentation pass
+GitHub: [@Bjaat](https://github.com/Bjaat)
